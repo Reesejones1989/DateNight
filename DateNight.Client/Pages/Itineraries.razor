@@ -1,0 +1,86 @@
+@page "/itineraries"
+@attribute [Authorize]
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>DateNight · My itineraries</PageTitle>
+
+<div class="dn-page-head">
+    <h1>My itineraries</h1>
+</div>
+
+<form class="dn-new-itinerary" @onsubmit="Create" @onsubmit:preventDefault>
+    <input class="form-control" placeholder="Name your night (e.g. Friday date night)" @bind="title" @bind:event="oninput" />
+    <input class="form-control" type="date" @bind="date" />
+    <input class="form-control" placeholder="City (optional)" @bind="city" />
+    <button class="btn btn-primary" type="submit" disabled="@(busy || string.IsNullOrWhiteSpace(title))">+ New itinerary</button>
+</form>
+
+@if (error is not null)
+{
+    <div class="alert alert-danger">@error</div>
+}
+
+@if (items is null)
+{
+    <p class="text-muted">Loading…</p>
+}
+else if (items.Count == 0)
+{
+    <div class="dn-empty">
+        No itineraries yet. Create one above, or <a href="">explore events</a> and add them as you go.
+    </div>
+}
+else
+{
+    <div class="dn-it-list">
+        @foreach (var it in items)
+        {
+            <a class="dn-it-row" href="@($"itineraries/{it.Id}")">
+                <div class="dn-it-date">
+                    @if (it.Date is { } d)
+                    {
+                        <span class="m">@d.ToString("MMM")</span>
+                        <span class="d">@d.Day</span>
+                    }
+                    else
+                    {
+                        <span class="m">TBD</span>
+                    }
+                </div>
+                <div class="dn-it-info">
+                    <strong>@it.Title</strong>
+                    <span>@(it.City ?? "No city") · @it.ItemCount item@(it.ItemCount == 1 ? "" : "s")</span>
+                </div>
+                <span class="dn-it-go">→</span>
+            </a>
+        }
+    </div>
+}
+
+@code {
+    private List<ItinerarySummaryDto>? items;
+    private string title = "";
+    private DateOnly? date;
+    private string? city;
+    private string? error;
+    private bool busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { items = await Api.GetItinerariesAsync(); }
+        catch (ApiException ex) { error = ex.Message; items = new(); }
+    }
+
+    private async Task Create()
+    {
+        busy = true; error = null;
+        try
+        {
+            var created = await Api.CreateItineraryAsync(new ItineraryRequest { Title = title, Date = date, City = city });
+            Nav.NavigateTo($"itineraries/{created.Id}");
+        }
+        catch (ApiException ex) { error = ex.Message; }
+        finally { busy = false; }
+    }
+}

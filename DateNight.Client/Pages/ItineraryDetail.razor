@@ -1,0 +1,283 @@
+@page "/itineraries/{Id:int}"
+@attribute [Authorize]
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>DateNight · @(itinerary?.Title ?? "Itinerary")</PageTitle>
+
+@if (error is not null)
+{
+    <div class="alert alert-danger">@error</div>
+}
+
+@if (itinerary is null)
+{
+    @if (error is null)
+    {
+        <p class="text-muted">Loading…</p>
+    }
+    <a href="itineraries">← All itineraries</a>
+}
+else
+{
+    <a class="dn-back" href="itineraries">← All itineraries</a>
+
+    @if (editingHeader)
+    {
+        <form class="dn-header-edit" @onsubmit="SaveHeader" @onsubmit:preventDefault>
+            <input class="form-control form-control-lg" @bind="header.Title" placeholder="Title" />
+            <div class="d-flex gap-2 flex-wrap">
+                <input class="form-control" type="date" @bind="header.Date" style="max-width: 12rem" />
+                <input class="form-control" @bind="header.City" placeholder="City" style="max-width: 18rem" />
+            </div>
+            <textarea class="form-control" rows="2" @bind="header.Notes" placeholder="Notes (dress code, budget, who's driving…)"></textarea>
+            <div class="d-flex gap-2">
+                <button class="btn btn-primary" type="submit">Save</button>
+                <button class="btn btn-outline-secondary" type="button" @onclick="() => editingHeader = false">Cancel</button>
+            </div>
+        </form>
+    }
+    else
+    {
+        <div class="dn-page-head">
+            <div>
+                <h1>@itinerary.Title</h1>
+                <p class="dn-sub">
+                    @(itinerary.Date?.ToString("dddd, MMMM d, yyyy") ?? "No date yet")
+                    @if (!string.IsNullOrWhiteSpace(itinerary.City))
+                    {
+                        <span> · @itinerary.City</span>
+                    }
+                </p>
+                @if (!string.IsNullOrWhiteSpace(itinerary.Notes))
+                {
+                    <p class="dn-notes">@itinerary.Notes</p>
+                }
+            </div>
+            <div class="dn-head-actions">
+                <a class="btn btn-primary" href="@FindUrl">🔎 Find events for this night</a>
+                <button class="btn btn-outline-secondary" @onclick="StartEditHeader">Edit</button>
+                @if (confirmDelete)
+                {
+                    <button class="btn btn-danger" @onclick="DeleteItinerary">Really delete?</button>
+                    <button class="btn btn-link" @onclick="() => confirmDelete = false">Keep it</button>
+                }
+                else
+                {
+                    <button class="btn btn-outline-danger" @onclick="() => confirmDelete = true">Delete</button>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="dn-summary">
+        <span><strong>@itinerary.Items.Count</strong> stop@(itinerary.Items.Count == 1 ? "" : "s")</span>
+        <span><strong>@itinerary.Items.Count(i => i.IsTicketed)</strong> ticketed</span>
+        @if (EstimatedCost > 0)
+        {
+            <span>From <strong>@EstimatedCost.ToString("C0", System.Globalization.CultureInfo.GetCultureInfo("en-US"))</strong> per person</span>
+        }
+    </div>
+
+    <ol class="dn-timeline">
+        @foreach (var item in itinerary.Items)
+        {
+            <li class="dn-stop">
+                <div class="dn-stop-time">
+                    @if (item.StartTime is { } st)
+                    {
+                        <span>@st.ToString("h:mm tt")</span>
+                        @if (itinerary.Date is null || DateOnly.FromDateTime(st) != itinerary.Date)
+                        {
+                            <small>@st.ToString("MMM d")</small>
+                        }
+                        @if (item.EndTime is { } et)
+                        {
+                            <small>to @et.ToString("h:mm tt")</small>
+                        }
+                    }
+                    else
+                    {
+                        <span class="text-muted">Anytime</span>
+                    }
+                </div>
+                <div class="dn-stop-dot @(item.Source switch { ItemSource.Ticketmaster => "tm", ItemSource.OpenStreetMap or ItemSource.GooglePlaces => "osm", _ => "manual" })"></div>
+                <div class="dn-stop-card">
+                    @if (editing?.Id == item.Id)
+                    {
+                        <ItemEditor Item="editing" DefaultDate="itinerary.Date" SubmitLabel="Save" OnSubmit="SaveItem" OnCancel="() => editing = null" />
+                    }
+                    else
+                    {
+                        <div class="dn-stop-head">
+                            <h3>@item.Title</h3>
+                            @if (item.Source != ItemSource.GooglePlaces || item.PriceMin is not null)
+                            {
+                                <span class="dn-pill @(item.IsTicketed ? "ticketed" : "free")">@Format.Price(item.PriceMin, item.PriceMax, item.IsTicketed)</span>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(item.Description))
+                        {
+                            <p class="dn-stop-desc">@item.Description</p>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(item.Location))
+                        {
+                            <p class="dn-stop-loc">📍 @item.Location</p>
+                        }
+                        <div class="dn-stop-actions">
+                            @if (Format.MapLink(item.Latitude, item.Longitude, item.Location) is { } map)
+                            {
+                                <a href="@map" target="_blank" rel="noopener">Map</a>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(item.Url))
+                            {
+                                <a href="@item.Url" target="_blank" rel="noopener">@(item.Source == ItemSource.Ticketmaster ? "Tickets" : "Website")</a>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(item.ReserveUrl))
+                            {
+                                <a href="@item.ReserveUrl" target="_blank" rel="noopener">Reserve on OpenTable</a>
+                            }
+                            <button class="btn btn-link btn-sm" @onclick="() => StartEdit(item)">Edit</button>
+                            <button class="btn btn-link btn-sm text-danger" @onclick="() => DeleteItem(item)">Remove</button>
+                            <span class="dn-source">@SourceLabel(item.Source)</span>
+                        </div>
+                    }
+                </div>
+            </li>
+        }
+    </ol>
+
+    @if (itinerary.Items.Count == 0)
+    {
+        <div class="dn-empty">Nothing planned yet. Find events, or add your own stop below.</div>
+    }
+
+    <section class="dn-add-manual">
+        <h2>Add your own stop</h2>
+        <p class="text-muted small">Dinner reservation, a walk, picking up flowers — anything.</p>
+        <ItemEditor @key="newItemKey" Item="newItem" DefaultDate="itinerary.Date" SubmitLabel="+ Add to itinerary" OnSubmit="AddItem" />
+    </section>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private ItineraryDto? itinerary;
+    private string? error;
+    private bool editingHeader, confirmDelete;
+    private ItineraryRequest header = new();
+    private ItineraryItemDto? editing;
+    private ItineraryItemDto newItem = new();
+    private int newItemKey;
+
+    private decimal EstimatedCost => itinerary?.Items.Sum(i => i.PriceMin ?? 0) ?? 0;
+
+    private string FindUrl
+    {
+        get
+        {
+            var q = $"?itinerary={Id}";
+            if (!string.IsNullOrWhiteSpace(itinerary?.City)) q += $"&city={Uri.EscapeDataString(itinerary.City)}";
+            if (itinerary?.Date is { } d) q += $"&date={d:yyyy-MM-dd}";
+            return q;
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            itinerary = await Api.GetItineraryAsync(Id);
+            ResetNewItem();
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private void ResetNewItem()
+    {
+        newItem = new ItineraryItemDto
+        {
+            StartTime = itinerary?.Date?.ToDateTime(new TimeOnly(19, 0))
+        };
+        newItemKey++;
+    }
+
+    private void StartEditHeader()
+    {
+        header = new ItineraryRequest { Title = itinerary!.Title, Date = itinerary.Date, City = itinerary.City, Notes = itinerary.Notes };
+        editingHeader = true;
+    }
+
+    private async Task SaveHeader()
+    {
+        try
+        {
+            itinerary = await Api.UpdateItineraryAsync(Id, header);
+            editingHeader = false; error = null;
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteItinerary()
+    {
+        try
+        {
+            await Api.DeleteItineraryAsync(Id);
+            Nav.NavigateTo("itineraries");
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private void StartEdit(ItineraryItemDto item)
+    {
+        // Edit a copy so Cancel doesn't leave half-changed values on screen.
+        editing = new ItineraryItemDto
+        {
+            Id = item.Id, Title = item.Title, Description = item.Description, StartTime = item.StartTime, EndTime = item.EndTime,
+            Location = item.Location, Url = item.Url, ReserveUrl = item.ReserveUrl, ImageUrl = item.ImageUrl, Source = item.Source, ExternalId = item.ExternalId,
+            IsTicketed = item.IsTicketed, PriceMin = item.PriceMin, PriceMax = item.PriceMax, Latitude = item.Latitude, Longitude = item.Longitude
+        };
+    }
+
+    private async Task SaveItem(ItineraryItemDto item)
+    {
+        try
+        {
+            await Api.UpdateItemAsync(Id, item);
+            editing = null; error = null;
+            itinerary = await Api.GetItineraryAsync(Id);
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private async Task AddItem(ItineraryItemDto item)
+    {
+        try
+        {
+            item.Source = ItemSource.Manual;
+            await Api.AddItemAsync(Id, item);
+            error = null;
+            itinerary = await Api.GetItineraryAsync(Id);
+            ResetNewItem();
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteItem(ItineraryItemDto item)
+    {
+        try
+        {
+            await Api.DeleteItemAsync(Id, item.Id);
+            itinerary!.Items.Remove(item);
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private static string SourceLabel(ItemSource s) => s switch
+    {
+        ItemSource.Ticketmaster => "via Ticketmaster",
+        ItemSource.OpenStreetMap => "via OpenStreetMap",
+        ItemSource.GooglePlaces => "via Google Maps",
+        _ => "added by you"
+    };
+}

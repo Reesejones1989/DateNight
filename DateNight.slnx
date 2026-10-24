@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="DateNight.Client/DateNight.Client.csproj" />
+  <Project Path="DateNight.Server/DateNight.Server.csproj" />
+  <Project Path="DateNight.Shared/DateNight.Shared.csproj" />
+</Solution>

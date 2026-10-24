@@ -1,0 +1,269 @@
+@page "/"
+@inject ApiClient Api
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>DateNight · Explore</PageTitle>
+
+<section class="dn-hero">
+    <h1>Plan a night out</h1>
+    <p>Find ticketed events and free spots in and around your city, then build them into an itinerary.</p>
+
+    <form class="dn-search" @onsubmit="Search" @onsubmit:preventDefault>
+        <div class="dn-field dn-field-city">
+            <label for="city">City</label>
+            <input id="city" class="form-control" placeholder="e.g. Atlanta, GA" @bind="city" />
+        </div>
+        <div class="dn-field">
+            <label for="radius">Within</label>
+            <select id="radius" class="form-select" @bind="radius">
+                <option value="5">5 miles</option>
+                <option value="10">10 miles</option>
+                <option value="25">25 miles</option>
+                <option value="50">50 miles</option>
+                <option value="100">100 miles</option>
+            </select>
+        </div>
+        @if (tab == Tab.Events)
+        {
+            <div class="dn-field">
+                <label for="from">From</label>
+                <input id="from" type="date" class="form-control" @bind="from" />
+            </div>
+            <div class="dn-field">
+                <label for="to">To</label>
+                <input id="to" type="date" class="form-control" @bind="to" />
+            </div>
+        }
+        <div class="dn-field dn-field-btn">
+            <button class="btn btn-primary w-100" type="submit" disabled="@(loading || string.IsNullOrWhiteSpace(city))">
+                @(loading ? "Searching…" : "Search")
+            </button>
+        </div>
+    </form>
+</section>
+
+@if (target is not null)
+{
+    <div class="dn-banner">
+        Adding to <strong>@target.Title</strong>. Click <em>+ Add</em> on anything below.
+        <a href="@($"itineraries/{target.Id}")">Back to itinerary →</a>
+    </div>
+}
+
+<div class="dn-tabs" role="tablist">
+    <button role="tab" class="@(tab == Tab.Events ? "active" : "")" @onclick="() => SwitchTab(Tab.Events)">🎟️ Ticketed events</button>
+    <button role="tab" class="@(tab == Tab.Places ? "active" : "")" @onclick="() => SwitchTab(Tab.Places)">📍 Places & free ideas</button>
+</div>
+
+<div class="dn-filters">
+    @if (tab == Tab.Events)
+    {
+        <select class="form-select form-select-sm" @bind="eventCategory" @bind:after="Search">
+            <option value="">All categories</option>
+            <option value="music">Music</option>
+            <option value="sports">Sports</option>
+            <option value="arts & theatre">Arts & Theatre</option>
+            <option value="comedy">Comedy</option>
+            <option value="film">Film</option>
+            <option value="family">Family</option>
+        </select>
+        <input class="form-control form-control-sm" placeholder="Keyword (artist, team, show…)" @bind="keyword" @onkeydown="KeywordKey" />
+        <select class="form-select form-select-sm" @bind="sort">
+            <option value="date">Sort by date</option>
+            <option value="distance">Sort by distance</option>
+            <option value="price">Sort by price</option>
+        </select>
+    }
+    else
+    {
+        @foreach (var (key, label) in placeCategories)
+        {
+            <button class="dn-chip @(placeCategory == key ? "active" : "")" @onclick="() => PickPlaceCategory(key)">@label</button>
+        }
+    }
+</div>
+
+@if (error is not null)
+{
+    <div class="alert alert-warning">@error</div>
+}
+@if (response?.Warning is not null)
+{
+    <p class="text-muted small">@response.Warning</p>
+}
+
+@if (response is not null && !loading)
+{
+    <p class="dn-result-count">
+        @Sorted.Count() result@(response.Results.Count == 1 ? "" : "s") near <strong>@ShortName(response.LocationName)</strong>
+    </p>
+    @if (response.Results.Count == 0)
+    {
+        <div class="dn-empty">
+            Nothing found. Try a wider radius@(tab == Tab.Events ? ", a longer date range," : "") or a different category.
+        </div>
+    }
+    <div class="dn-grid">
+        @foreach (var r in Sorted)
+        {
+            <ResultCard Result="r" Added="added.Contains(Key(r))" OnAdd="Add" />
+        }
+    </div>
+    @if (response.Results.Count > 0 && response.Provider is not null)
+    {
+        <p class="dn-attribution">
+            Results from @(response.Provider switch { "Google" => "Google Maps", "OpenStreetMap" => "© OpenStreetMap contributors", var p => p })
+        </p>
+    }
+}
+else if (loading)
+{
+    <div class="dn-grid">
+        @for (int i = 0; i < 6; i++)
+        {
+            <div class="dn-card dn-skeleton"></div>
+        }
+    </div>
+}
+
+<AddToItineraryDialog Result="pending" City="@city" OnClose="() => pending = null" OnAdded="Added" />
+
+@if (toast is not null)
+{
+    <div class="dn-toast" role="status">@toast</div>
+}
+
+@code {
+    private enum Tab { Events, Places }
+
+    [SupplyParameterFromQuery(Name = "city")] public string? QueryCity { get; set; }
+    [SupplyParameterFromQuery(Name = "date")] public string? QueryDate { get; set; }
+    [SupplyParameterFromQuery(Name = "itinerary")] public int? QueryItinerary { get; set; }
+
+    private readonly (string Key, string Label)[] placeCategories =
+    {
+        ("outdoors", "🌳 Parks & Outdoors"), ("culture", "🎨 Arts & Culture"),
+        ("food", "🍽️ Restaurants & Dessert"), ("nightlife", "🍸 Drinks & Nightlife"),
+    };
+
+    private Tab tab = Tab.Events;
+    private string city = "";
+    private int radius = 25;
+    private DateOnly from = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly to = DateOnly.FromDateTime(DateTime.Today).AddDays(7);
+    private string eventCategory = "";
+    private string keyword = "";
+    private string sort = "date";
+    private string placeCategory = "outdoors";
+
+    private bool loading;
+    private string? error;
+    private SearchResponse? response;
+    private EventResult? pending;
+    private ItinerarySummaryDto? target;
+    private readonly HashSet<string> added = new();
+    private string? toast;
+
+    private IEnumerable<EventResult> Sorted
+    {
+        get
+        {
+            IEnumerable<EventResult> list = response?.Results ?? new();
+            if (sort == "distance") return list.OrderBy(r => r.DistanceMiles ?? double.MaxValue);
+            if (sort == "price") return list.OrderBy(r => r.PriceMin ?? r.PriceMax ?? decimal.MaxValue);
+            return list;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(QueryCity)) city = QueryCity;
+        else
+        {
+            try { city = await JS.InvokeAsync<string?>("localStorage.getItem", "dn.city") ?? ""; } catch { }
+        }
+
+        if (DateOnly.TryParse(QueryDate, out var d)) { from = d; to = d; }
+
+        if (QueryItinerary is int id)
+        {
+            try
+            {
+                var it = await Api.GetItineraryAsync(id);
+                target = new ItinerarySummaryDto(it.Id, it.Title, it.Date, it.City, it.Items.Count);
+                foreach (var item in it.Items.Where(i => i.ExternalId != null)) added.Add($"{item.Source}:{item.ExternalId}");
+                if (string.IsNullOrWhiteSpace(city) && it.City != null) city = it.City;
+                if (it.Date is { } date && QueryDate is null) { from = date; to = date; }
+            }
+            catch (ApiException) { /* not signed in or not found: just browse */ }
+        }
+
+        if (!string.IsNullOrWhiteSpace(city)) await Search();
+    }
+
+    private async Task Search()
+    {
+        if (string.IsNullOrWhiteSpace(city)) return;
+        loading = true; error = null;
+        try
+        {
+            try { await JS.InvokeVoidAsync("localStorage.setItem", "dn.city", city.Trim()); } catch { }
+            response = tab == Tab.Events
+                ? await Api.SearchEventsAsync(city, radius, from, to, keyword, eventCategory)
+                : await Api.SearchPlacesAsync(city, radius, placeCategory, target?.Date ?? from);
+        }
+        catch (ApiException ex) { error = ex.Message; response = null; }
+        finally { loading = false; }
+    }
+
+    private async Task SwitchTab(Tab t)
+    {
+        if (tab == t) return;
+        tab = t; response = null;
+        await Search();
+    }
+
+    private async Task PickPlaceCategory(string key)
+    {
+        placeCategory = key;
+        await Search();
+    }
+
+    private async Task KeywordKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Search();
+    }
+
+    private static string Key(EventResult r) => $"{r.Source}:{r.ExternalId}";
+
+    private async Task Add(EventResult r)
+    {
+        if (target is null) { pending = r; return; }
+        try
+        {
+            await Api.AddItemAsync(target.Id, ItineraryItemDto.FromResult(r));
+            added.Add(Key(r));
+            await ShowToast($"Added to {target.Title}");
+        }
+        catch (ApiException ex) { error = ex.Message; }
+    }
+
+    private async Task Added(int itineraryId)
+    {
+        if (pending is not null) added.Add(Key(pending));
+        pending = null;
+        await ShowToast("Added to your itinerary");
+    }
+
+    private async Task ShowToast(string message)
+    {
+        toast = message;
+        StateHasChanged();
+        await Task.Delay(2200);
+        toast = null;
+        StateHasChanged();
+    }
+
+    private static string ShortName(string full) => string.Join(",", full.Split(',').Take(2));
+}

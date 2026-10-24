@@ -1,0 +1,38 @@
+@inherits LayoutComponentBase
+@inject CookieAuthStateProvider Auth
+@inject NavigationManager Nav
+
+<header class="dn-header">
+    <div class="dn-container dn-header-inner">
+        <a class="dn-brand" href="">
+            <span class="dn-brand-mark">♥</span> DateNight
+        </a>
+        <nav class="dn-nav">
+            <NavLink href="" Match="NavLinkMatch.All">Explore</NavLink>
+            <NavLink href="itineraries">My itineraries</NavLink>
+        </nav>
+        <div class="dn-account">
+            <AuthorizeView>
+                <Authorized>
+                    <span class="dn-email">@context.User.Identity?.Name</span>
+                    <button class="btn btn-sm btn-outline-light" @onclick="SignOut">Sign out</button>
+                </Authorized>
+                <NotAuthorized>
+                    <a class="btn btn-sm btn-light" href="login">Sign in</a>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+    </div>
+</header>
+
+<main class="dn-container dn-main">
+    @Body
+</main>
+
+@code {
+    private async Task SignOut()
+    {
+        await Auth.LogoutAsync();
+        Nav.NavigateTo("");
+    }
+}

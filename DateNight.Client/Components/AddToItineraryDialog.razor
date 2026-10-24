@@ -1,0 +1,119 @@
+@* Modal for picking which itinerary a search result goes on (or creating a new one). *@
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+@if (Result is not null)
+{
+    <div class="dn-backdrop" @onclick="Close"></div>
+    <div class="dn-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
+        <div class="dn-modal-head">
+            <h2 id="add-title">Add to itinerary</h2>
+            <button class="btn-close" aria-label="Close" @onclick="Close"></button>
+        </div>
+        <p class="dn-modal-sub">@Result.Title</p>
+
+        <AuthorizeView>
+            <NotAuthorized>
+                <p>Sign in to save events to an itinerary.</p>
+                <a class="btn btn-primary" href="@($"login?returnUrl={Uri.EscapeDataString(Nav.ToBaseRelativePath(Nav.Uri))}")">Sign in</a>
+            </NotAuthorized>
+            <Authorized>
+                @if (error is not null)
+                {
+                    <div class="alert alert-danger py-2">@error</div>
+                }
+                @if (itineraries is null)
+                {
+                    <p class="text-muted">Loading your itineraries…</p>
+                }
+                else
+                {
+                    @if (itineraries.Count > 0)
+                    {
+                        <div class="dn-pick-list">
+                            @foreach (var it in itineraries)
+                            {
+                                <button class="dn-pick" disabled="@busy" @onclick="() => AddTo(it.Id)">
+                                    <strong>@it.Title</strong>
+                                    <span>@(it.Date?.ToString("ddd, MMM d") ?? "No date") · @it.ItemCount item@(it.ItemCount == 1 ? "" : "s")</span>
+                                </button>
+                            }
+                        </div>
+                        <div class="dn-divider">or start a new one</div>
+                    }
+                    <form class="d-flex gap-2" @onsubmit="CreateAndAdd" @onsubmit:preventDefault>
+                        <input class="form-control" placeholder="e.g. Anniversary night" @bind="newTitle" @bind:event="oninput" />
+                        <button class="btn btn-primary text-nowrap" type="submit" disabled="@(busy || string.IsNullOrWhiteSpace(newTitle))">Create & add</button>
+                    </form>
+                }
+            </Authorized>
+        </AuthorizeView>
+    </div>
+}
+
+@code {
+    [Parameter] public EventResult? Result { get; set; }
+    [Parameter] public string? City { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<int> OnAdded { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<ItinerarySummaryDto>? itineraries;
+    private string newTitle = "";
+    private string? error;
+    private bool busy;
+    private EventResult? loadedFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Result is null || ReferenceEquals(Result, loadedFor)) return;
+        loadedFor = Result;
+        error = null;
+        newTitle = "";
+
+        var auth = AuthState is null ? null : await AuthState;
+        if (auth?.User.Identity?.IsAuthenticated != true) return;
+
+        try { itineraries = await Api.GetItinerariesAsync(); }
+        catch (ApiException ex) { error = ex.Message; itineraries = new(); }
+    }
+
+    private async Task AddTo(int itineraryId)
+    {
+        if (Result is null) return;
+        busy = true; error = null;
+        try
+        {
+            await Api.AddItemAsync(itineraryId, ItineraryItemDto.FromResult(Result));
+            await OnAdded.InvokeAsync(itineraryId);
+            itineraries = null; loadedFor = null;
+        }
+        catch (ApiException ex) { error = ex.Message; }
+        finally { busy = false; }
+    }
+
+    private async Task CreateAndAdd()
+    {
+        if (Result is null || string.IsNullOrWhiteSpace(newTitle)) return;
+        busy = true; error = null;
+        try
+        {
+            var created = await Api.CreateItineraryAsync(new ItineraryRequest
+            {
+                Title = newTitle,
+                Date = Result.StartTime is { } st ? DateOnly.FromDateTime(st) : null,
+                City = Result.City ?? City
+            });
+            busy = false;
+            await AddTo(created.Id);
+        }
+        catch (ApiException ex) { error = ex.Message; busy = false; }
+    }
+
+    private Task Close()
+    {
+        loadedFor = null;
+        itineraries = null;
+        return OnClose.InvokeAsync();
+    }
+}

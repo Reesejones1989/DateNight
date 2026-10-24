@@ -1,0 +1,103 @@
+@* Form for adding or editing an itinerary stop. *@
+
+<form class="dn-item-editor" @onsubmit="Submit" @onsubmit:preventDefault>
+    <div class="row g-2">
+        <div class="col-12">
+            <input class="form-control" placeholder="What? (e.g. Dinner at Lucia's)" @bind="Item.Title" @bind:event="oninput" />
+        </div>
+        <div class="col-sm-4">
+            <label class="form-label small" for="@($"{idPrefix}-date")">Date</label>
+            <input id="@($"{idPrefix}-date")" class="form-control" type="date" @bind="date" />
+        </div>
+        <div class="col-sm-4 col-6">
+            <label class="form-label small" for="@($"{idPrefix}-start")">Starts</label>
+            <input id="@($"{idPrefix}-start")" class="form-control" type="time" @bind="start" />
+        </div>
+        <div class="col-sm-4 col-6">
+            <label class="form-label small" for="@($"{idPrefix}-end")">Ends (optional)</label>
+            <input id="@($"{idPrefix}-end")" class="form-control" type="time" @bind="end" />
+        </div>
+        @if (start is not null && end is not null && end <= start)
+        {
+            <div class="col-12 small text-muted">Ends after midnight, on the next day.</div>
+        }
+        <div class="col-12">
+            <input class="form-control" placeholder="Where? (address or place name)" @bind="Item.Location" />
+        </div>
+        <div class="col-12">
+            <textarea class="form-control" rows="2" placeholder="Notes" @bind="Item.Description"></textarea>
+        </div>
+        <div class="col-sm-6">
+            <input class="form-control" placeholder="Link (reservation, tickets…)" @bind="Item.Url" />
+        </div>
+        <div class="col-sm-3 col-6">
+            <input class="form-control" type="number" min="0" step="1" placeholder="Cost $" @bind="Item.PriceMin" />
+        </div>
+        <div class="col-sm-3 col-6 d-flex align-items-center">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="@($"{idPrefix}-tk")" @bind="Item.IsTicketed" />
+                <label class="form-check-label" for="@($"{idPrefix}-tk")">Needs tickets</label>
+            </div>
+        </div>
+    </div>
+    @if (validation is not null)
+    {
+        <div class="text-danger small mt-2">@validation</div>
+    }
+    <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit" disabled="@busy">@SubmitLabel</button>
+        @if (OnCancel.HasDelegate)
+        {
+            <button class="btn btn-outline-secondary" type="button" @onclick="OnCancel">Cancel</button>
+        }
+    </div>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public ItineraryItemDto Item { get; set; } = default!;
+    /// <summary>Date to use when the stop doesn't have one yet (normally the itinerary's date).</summary>
+    [Parameter] public DateOnly? DefaultDate { get; set; }
+    [Parameter] public string SubmitLabel { get; set; } = "Save";
+    [Parameter] public EventCallback<ItineraryItemDto> OnSubmit { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private readonly string idPrefix = "ie-" + Guid.NewGuid().ToString("N")[..8];
+    private ItineraryItemDto? loadedFrom;
+    private DateOnly? date;
+    private TimeOnly? start, end;
+    private string? validation;
+    private bool busy;
+
+    protected override void OnParametersSet()
+    {
+        // Split the stored date-times into separate date / start / end fields, once per item.
+        if (ReferenceEquals(Item, loadedFrom)) return;
+        loadedFrom = Item;
+
+        date = Item.StartTime is { } s ? DateOnly.FromDateTime(s) : DefaultDate;
+        start = Item.StartTime is { } st && st.TimeOfDay != TimeSpan.Zero ? TimeOnly.FromDateTime(st) : null;
+        end = Item.EndTime is { } et ? TimeOnly.FromDateTime(et) : null;
+        validation = null;
+    }
+
+    private async Task Submit()
+    {
+        validation = null;
+        if (string.IsNullOrWhiteSpace(Item.Title)) { validation = "Give this stop a name."; return; }
+        if (end is not null && start is null) { validation = "Add a start time to go with the end time."; return; }
+        if (start is not null && date is null) { validation = "Pick a date for this stop."; return; }
+
+        Item.StartTime = date is { } d ? d.ToDateTime(start ?? TimeOnly.MinValue) : null;
+        Item.EndTime = null;
+        if (date is { } day && start is { } s && end is { } e)
+        {
+            // An end time at or before the start time means the stop runs past midnight.
+            var endDay = e <= s ? day.AddDays(1) : day;
+            Item.EndTime = endDay.ToDateTime(e);
+        }
+
+        busy = true;
+        try { await OnSubmit.InvokeAsync(Item); }
+        finally { busy = false; }
+    }
+}

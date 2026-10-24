@@ -1,0 +1,89 @@
+@* One search result (ticketed event or place) with an "Add" button. *@
+
+<article class="dn-card">
+    @if (!string.IsNullOrEmpty(Result.ImageUrl))
+    {
+        <img class="dn-card-img" src="@Result.ImageUrl" alt="" loading="lazy" />
+    }
+    else
+    {
+        <div class="dn-card-img dn-card-img-placeholder @(Result.Source == ItemSource.Ticketmaster ? "" : "place")">
+            @(Result.Source == ItemSource.Ticketmaster ? "🎟️" : "📍")
+        </div>
+    }
+    <div class="dn-card-body">
+        <div class="dn-card-meta">
+            @if (Result.StartTime is not null)
+            {
+                <span>@Format.When(Result.StartTime)</span>
+            }
+            @if (Result.DistanceMiles is not null)
+            {
+                <span>@Result.DistanceMiles mi</span>
+            }
+        </div>
+        <h3 class="dn-card-title">@Result.Title</h3>
+        @if (Result.Rating is { } rating)
+        {
+            <div class="dn-card-rating">
+                <span class="star">★</span> @rating.ToString("0.0")
+                @if (Result.RatingCount is { } n)
+                {
+                    <span class="count">(@n.ToString("N0"))</span>
+                }
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(Result.Category))
+        {
+            <div class="dn-card-cat">@Result.Category</div>
+        }
+        <div class="dn-card-where">
+            @string.Join(" · ", new[] { Result.VenueName, Result.Address, Result.City }.Where(s => !string.IsNullOrWhiteSpace(s)))
+        </div>
+        <div class="dn-card-foot">
+            @if (Result.Source == ItemSource.GooglePlaces)
+            {
+                @if (!string.IsNullOrEmpty(Result.PriceLevel))
+                {
+                    <span class="dn-pill @(Result.PriceLevel == "Free" ? "free" : "price")">@Result.PriceLevel</span>
+                }
+                else
+                {
+                    <span></span>
+                }
+            }
+            else
+            {
+                <span class="dn-pill @(Result.IsTicketed ? "ticketed" : "free")">
+                    @Format.Price(Result.PriceMin, Result.PriceMax, Result.IsTicketed)
+                </span>
+            }
+            <div class="dn-card-actions">
+                @if (!string.IsNullOrEmpty(Result.Url))
+                {
+                    <a class="btn btn-sm btn-link" href="@Result.Url" target="_blank" rel="noopener">
+                        @(Result.Source == ItemSource.Ticketmaster ? "Tickets" : "Details")
+                    </a>
+                }
+                @if (!string.IsNullOrEmpty(Result.ReserveUrl))
+                {
+                    <a class="btn btn-sm btn-link" href="@Result.ReserveUrl" target="_blank" rel="noopener" title="Find a table on OpenTable">Reserve</a>
+                }
+                @if (Added)
+                {
+                    <span class="dn-added">✓ Added</span>
+                }
+                else
+                {
+                    <button class="btn btn-sm btn-primary" @onclick="() => OnAdd.InvokeAsync(Result)">+ Add</button>
+                }
+            </div>
+        </div>
+    </div>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public EventResult Result { get; set; } = default!;
+    [Parameter] public bool Added { get; set; }
+    [Parameter] public EventCallback<EventResult> OnAdd { get; set; }
+}
