@@ -6,8 +6,20 @@ using Microsoft.Extensions.Caching.Memory;
 namespace DateNight.Server.Services;
 
 /// <summary>Finds non-ticketed date spots (parks, museums, restaurants, bars...) from OpenStreetMap via the Overpass API.</summary>
-public class PlacesService(HttpClient http, IMemoryCache cache, ILogger<PlacesService> log)
+public class PlacesService(HttpClient http, IConfiguration config, IMemoryCache cache, ILogger<PlacesService> log)
 {
+    // Public Overpass servers, tried in order. The main one is often overloaded, so fall back to the others.
+    // List: https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances
+    private static readonly string[] DefaultServers =
+    [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ];
+
+    private string[] Servers =>
+        config.GetSection("OpenStreetMap:OverpassUrls").Get<string[]>() is { Length: > 0 } custom ? custom : DefaultServers;
+
     public static readonly IReadOnlyDictionary<string, string> Categories = new Dictionary<string, string>
     {
         ["outdoors"] = "Outdoors",
@@ -24,12 +36,12 @@ public class PlacesService(HttpClient http, IMemoryCache cache, ILogger<PlacesSe
             "nwr[\"leisure\"~\"^(park|garden|nature_reserve)$\"][\"name\"]",
             "nwr[\"tourism\"~\"^(viewpoint|picnic_site)$\"][\"name\"]",
             "nwr[\"natural\"=\"beach\"][\"name\"]",
-        }, 15),
+        }, 10),
         ["culture"] = (new[]
         {
             "nwr[\"tourism\"~\"^(museum|gallery|attraction|zoo|aquarium)$\"][\"name\"]",
             "nwr[\"amenity\"~\"^(theatre|arts_centre|planetarium)$\"][\"name\"]",
-        }, 15),
+        }, 10),
         ["food"] = (new[]
         {
             "nwr[\"amenity\"~\"^(restaurant|cafe|ice_cream)$\"][\"name\"]",
@@ -56,15 +68,7 @@ public class PlacesService(HttpClient http, IMemoryCache cache, ILogger<PlacesSe
         var cacheKey = "osm:" + body;
         if (cache.TryGetValue(cacheKey, out List<EventResult>? cached)) return (cached!, warning);
 
-        using var resp = await http.PostAsync("https://overpass-api.de/api/interpreter",
-            new FormUrlEncodedContent(new Dictionary<string, string> { ["data"] = body }), ct);
-        if (!resp.IsSuccessStatusCode)
-        {
-            log.LogWarning("Overpass returned {Status}", resp.StatusCode);
-            throw new HttpRequestException("OpenStreetMap is busy right now. Try again in a minute.");
-        }
-
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        using var doc = await QueryAsync(body, ct);
         var results = new List<EventResult>();
 
         foreach (var el in doc.RootElement.GetProperty("elements").EnumerateArray())
@@ -110,6 +114,60 @@ public class PlacesService(HttpClient http, IMemoryCache cache, ILogger<PlacesSe
         cache.Set(cacheKey, results, TimeSpan.FromHours(6));
         return (results, warning);
     }
+
+    /// <summary>Runs an Overpass query, moving on to the next server if one refuses, is overloaded or times out.</summary>
+    private async Task<JsonDocument> QueryAsync(string query, CancellationToken ct)
+    {
+        var problems = new List<string>();
+        foreach (var server in Servers)
+        {
+            var host = Uri.TryCreate(server, UriKind.Absolute, out var u) ? u.Host : server;
+            try
+            {
+                using var resp = await http.PostAsync(server,
+                    new FormUrlEncodedContent(new Dictionary<string, string> { ["data"] = query }), ct);
+                var text = await resp.Content.ReadAsStringAsync(ct);
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    log.LogWarning("Overpass {Host} returned {Status}: {Body}", host, (int)resp.StatusCode, Trim(text));
+                    problems.Add($"{host}: {(int)resp.StatusCode} {Explain((int)resp.StatusCode)}");
+                    continue;
+                }
+
+                var doc = JsonDocument.Parse(text);
+                // Overpass answers 200 even when the query timed out; the problem is in "remark".
+                if (doc.RootElement.TryGetProperty("remark", out var remark) &&
+                    remark.GetString() is { } r && r.Contains("error", StringComparison.OrdinalIgnoreCase))
+                {
+                    log.LogWarning("Overpass {Host} remark: {Remark}", host, r);
+                    problems.Add($"{host}: {r}");
+                    doc.Dispose();
+                    continue;
+                }
+                return doc;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
+            {
+                log.LogWarning(ex, "Overpass {Host} failed", host);
+                problems.Add($"{host}: {(ex is TaskCanceledException ? "timed out" : ex.Message)}");
+            }
+        }
+
+        throw new HttpRequestException(
+            "Couldn't load places from OpenStreetMap right now. Try a smaller radius or try again in a minute. (" +
+            string.Join("; ", problems) + ")");
+    }
+
+    private static string Explain(int status) => status switch
+    {
+        406 => "(request refused; set OpenStreetMap:ContactEmail)",
+        429 => "(too many requests; wait 30 seconds)",
+        504 or 503 => "(server overloaded)",
+        _ => ""
+    };
+
+    private static string Trim(string s) => s.Length > 300 ? s[..300] : s;
 
     private static string Pretty(string? s) =>
         string.IsNullOrEmpty(s) ? "Place" : CultureInfo.InvariantCulture.TextInfo.ToTitleCase(s.Replace('_', ' '));

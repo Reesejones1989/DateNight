@@ -1,0 +1,21 @@
+# Render Blueprint: in Render, choose New > Blueprint and pick this GitHub repo.
+# Render asks for each "sync: false" value when you create it; they're kept as secrets, not in git.
+services:
+  - type: web
+    name: datenight
+    runtime: docker
+    plan: free
+    branch: master
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      # Your Neon connection string, e.g. postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require
+      - key: ConnectionStrings__Default
+        sync: false
+      - key: Ticketmaster__ApiKey
+        sync: false
+      - key: GooglePlaces__ApiKey
+        sync: false
+      - key: OpenStreetMap__ContactEmail
+        sync: false

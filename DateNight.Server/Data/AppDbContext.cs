@@ -1,4 +1,5 @@
 using DateNight.Shared;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -46,10 +47,13 @@ public class ItineraryItem
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }
 
-public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbContext<AppUser>(options)
+public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbContext<AppUser>(options), IDataProtectionKeyContext
 {
     public DbSet<Itinerary> Itineraries => Set<Itinerary>();
     public DbSet<ItineraryItem> ItineraryItems => Set<ItineraryItem>();
+
+    /// <summary>Sign-in cookie keys, stored here so people stay signed in after the server restarts.</summary>
+    public DbSet<DataProtectionKey> DataProtectionKeys { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -69,6 +73,13 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : IdentityDbCo
             // SQLite has no native decimal type; store as double so ordering/comparison work.
             e.Property(i => i.PriceMin).HasConversion<double?>();
             e.Property(i => i.PriceMax).HasConversion<double?>();
+
+            // Stop times are local "wall clock" times (7:00 PM wherever the date is), not UTC instants.
+            if (Database.ProviderName == DatabaseSetup.NpgsqlProvider)
+            {
+                e.Property(i => i.StartTime).HasColumnType("timestamp without time zone");
+                e.Property(i => i.EndTime).HasColumnType("timestamp without time zone");
+            }
         });
     }
 }
@@ -80,7 +91,26 @@ public static class SchemaUpgrades
 {
     public static void Apply(AppDbContext db)
     {
+        // Only SQLite databases made by older versions of the app need patching.
+        // A new Postgres database is created with everything already in place.
+        if (db.Database.ProviderName != "Microsoft.EntityFrameworkCore.Sqlite") return;
+
         AddColumnIfMissing(db, "ItineraryItems", "ReserveUrl", "TEXT NULL");
+        Execute(db, """
+            CREATE TABLE IF NOT EXISTS "DataProtectionKeys" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_DataProtectionKeys" PRIMARY KEY AUTOINCREMENT,
+                "FriendlyName" TEXT NULL,
+                "Xml" TEXT NULL)
+            """);
+    }
+
+    private static void Execute(AppDbContext db, string sql)
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 
     private static void AddColumnIfMissing(AppDbContext db, string table, string column, string definition)
